@@ -6,6 +6,6 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 0
-    path: 
-    guid: 00000000000000000000000000000000
+    path: Assets/StochasticScreenSpaceReflection/Sample/Scene/Test.unity
+    guid: 2c1a1a10fd131544c82349d8817ec27a
   m_configObjects: {}
