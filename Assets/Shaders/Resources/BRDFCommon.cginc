@@ -36,7 +36,7 @@ float BRDF_UE4(float3 V, float3 L, float3 N, float Roughness) {
 	return D * G;
 }
 
-float BRDF_Unity_Weight(float3 V, float3 L, float3 N, float Roughness) {
+float BRDF_Unity(float3 V, float3 L, float3 N, float Roughness) {
 	float3 H = normalize(L + V);
 
 	float NdotH = saturate(dot(N,H));
@@ -48,7 +48,7 @@ float BRDF_Unity_Weight(float3 V, float3 L, float3 N, float Roughness) {
 
 	return (D * G) * (UNITY_PI / 4);
 }
-
+#ifndef MONTCALOCOMMON
 float4 TangentToWorld(float3 N, float4 H) {
 	float3 UpVector = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
 	float3 T = normalize( cross( UpVector, N ) );
@@ -56,7 +56,8 @@ float4 TangentToWorld(float3 N, float4 H) {
 				 
 	return float4((T * H.x) + (B * H.y) + (N * H.z), H.w);
 }
-
+#endif
+#ifndef MONTCALOCOMMON
 float4 ImportanceSampleGGX( float2 E, float Roughness ) {
 	float m = Roughness * Roughness;
 	float m2 = m * m;
@@ -95,7 +96,7 @@ float4 ImportanceSampleBlinn(float2 E, float Roughness) {
 
 	return float4( H, PDF );
 }
-
+#endif
 float3 FresnelSchlick(float NoV, float3 F0) {
     return F0 + (1 - F0) * pow(1.0 - NoV, 5);
 }

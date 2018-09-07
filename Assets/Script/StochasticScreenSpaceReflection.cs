@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.PostProcessing;
 
 //////Enum Property//////
 [System.Serializable]
@@ -11,9 +12,10 @@ public enum RenderResolution
     Half = 2,
 };
 //////Enum Property//////
-
+[ExecuteInEditMode]
 [RequireComponent(typeof(Camera))]
-public sealed class StochasticScreenSpaceReflection : MonoBehaviour
+[RequireComponent(typeof(PostProcessLayer))]
+public class StochasticScreenSpaceReflection : MonoBehaviour
 {
 
     //////////////////////////////////////////////////////////////////////////////Property Star///////////////////////////////////////////////////////////////////////////////////////////
@@ -28,6 +30,7 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     /* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* */
 
     //////SSR Property Star//////
+    private Texture noise;
     private Vector2 jitterSample = new Vector2(1, 1);
     private Vector2 CameraSize;
     private Matrix4x4 projectionMatrix;
@@ -37,7 +40,7 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     private Matrix4x4 worldToCameraMatrix;
     private Matrix4x4 cameraToWorldMatrix;
     private Camera RenderCamera;
-    private CommandBuffer ScreenSpaceReflectionBuffer;
+    private CommandBuffer ScreenSpaceReflectionBuffer = null;
     private RenderTexture temporalRT;
     private RenderTexture forntDepthTexture;
     private RenderTexture SceneColor_RT;
@@ -51,6 +54,7 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     private static int _BRDFBias = Shader.PropertyToID("_BRDFBias");
     private static int _NumSteps = Shader.PropertyToID("_NumSteps");
     private static int _ScreenFade = Shader.PropertyToID("_ScreenFade");
+    private static int _Sharpeness = Shader.PropertyToID("_Sharpeness");
     private static int _Thickness = Shader.PropertyToID("_Thickness");
     private static int _TScale = Shader.PropertyToID("_TScale");
     private static int _TResponse = Shader.PropertyToID("_TResponse");
@@ -93,7 +97,6 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     /* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* *//* */
                                                                                                                                                                                                                                                //////Control Property Star//////
     [Header("TraceProperty")]
-
 
     [SerializeField]
     bool TraceBehind = false;
@@ -146,12 +149,16 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
 
     [Range(0, 0.5f)]
     [SerializeField]
-    float FadeSize = 0.1f;
+    float FadeSize = 0.05f;
 
 
     private Material StochasticScreenSpaceReflectionMaterial;
 
     [Header("FiltterProperty")]
+
+    [Range(1, 6)]
+    [SerializeField]
+    float Sharpeness = 3;
 
     [Range(1, 5)]
     [SerializeField]
@@ -160,10 +167,8 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
 
     [Range(0, 1)]
     [SerializeField]
-    float TemporalResponse = 0.96f;
+    float TemporalResponse = 0.99f;
 
-
-    Texture noise;
 
     [Header("DeBugProperty")]
 
@@ -204,19 +209,26 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     {
         jitterSample = GenerateRandomOffset();
         UpdateVariable();
-        
+
         //////RayTrace Buffer//////
-        SSRBuffer();
+        if (ScreenSpaceReflectionBuffer != null)
+        {
+            SSRBuffer();
+        }
     }
 
     private void OnEnable()
     {
-        RenderCamera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, ScreenSpaceReflectionBuffer);
+        if (ScreenSpaceReflectionBuffer != null) {
+            RenderCamera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, ScreenSpaceReflectionBuffer);
+        }
     }
 
     void OnDisable()
     {
-        RenderCamera.RemoveCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, ScreenSpaceReflectionBuffer);
+        if (ScreenSpaceReflectionBuffer != null) {
+            RenderCamera.RemoveCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, ScreenSpaceReflectionBuffer);
+        }
     }
 
     private void OnDestroy()
@@ -270,11 +282,13 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
         {
             StochasticScreenSpaceReflectionMaterial.SetInt(_ResolverNum, 4);
             StochasticScreenSpaceReflectionMaterial.SetFloat(_TResponse, TemporalResponse);
+            StochasticScreenSpaceReflectionMaterial.SetFloat(_Sharpeness, Sharpeness);
         }
         else
         {
             StochasticScreenSpaceReflectionMaterial.SetInt(_ResolverNum, 1);
             StochasticScreenSpaceReflectionMaterial.SetFloat(_TResponse, 0);
+            StochasticScreenSpaceReflectionMaterial.SetFloat(_Sharpeness, 0);
         }
     }
 
@@ -370,8 +384,11 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
     private void InstallRenderCommandBuffer()
     {
         //////Install RayCastingBuffer//////
-        ScreenSpaceReflectionBuffer = new CommandBuffer();
-        ScreenSpaceReflectionBuffer.name = "StochasticScreenSpaceReflection";
+        if (ScreenSpaceReflectionBuffer == null) 
+        {
+            ScreenSpaceReflectionBuffer = new CommandBuffer();
+            ScreenSpaceReflectionBuffer.name = "StochasticScreenSpaceReflection";
+        }
     }
 
     private void SSRBuffer()
@@ -435,7 +452,9 @@ public sealed class StochasticScreenSpaceReflection : MonoBehaviour
             forntDepthTexture.Release();
             forntDepthTexture = null;
         }
-        ScreenSpaceReflectionBuffer.Dispose();
+        if (ScreenSpaceReflectionBuffer != null) {
+            ScreenSpaceReflectionBuffer.Dispose();
+        }
     }
 
     private void SetFPSFrame(bool UseHighFPS, int TargetFPS)

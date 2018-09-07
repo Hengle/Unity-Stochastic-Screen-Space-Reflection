@@ -7,7 +7,7 @@ sampler2D _CameraDepthTexture, _backDepthTexture, _SceneColor_RT, _Noise, _RayCa
 
 int _NumSteps, _ResolverNum, _TreatBackfaceHitAsMiss, _AllowBackwardsRays, _TraceBehindObjects, _BilateralScale;
 										 
-float _BRDFBias, _ScreenFade, _TScale, _TResponse, _Thickness, _RayStepSize, _MaxRayTraceDistance;
+float _BRDFBias, _ScreenFade, _TScale, _TResponse, _Thickness, _RayStepSize, _MaxRayTraceDistance, _Sharpeness;
 
 float4 _ScreenSize, _NoiseSize, _ProjInfo,
 	   _ResolveSize, _RayCastSize, _Jitter;
@@ -57,6 +57,8 @@ void LinearRayMarching3DSpace(PixelInput i, out float4 rayCasting : SV_Target0, 
 	float2 Xi = jitter;
 	Xi.y = lerp(Xi.y, 0, _BRDFBias);
 	float4 H;
+
+	UNITY_BRANCH
 	if(roughness > 0.1) {
 		H = TangentToWorld(worldNormal, ImportanceSampleGGX(Xi, roughness));
 	} else {
@@ -66,7 +68,7 @@ void LinearRayMarching3DSpace(PixelInput i, out float4 rayCasting : SV_Target0, 
     float3 viewNormal = mul((float3x3)(_WorldToCameraMatrix), H);
     float3 reflectionDir = GetReflectionDir(rayPos, viewNormal);
 
-    if (_AllowBackwardsRays == 0 && reflectionDir.z > 0.0) {
+    if (_AllowBackwardsRays == 0 && reflectionDir.z > 0) {
             rayCasting = 0;
     }
 
@@ -145,6 +147,7 @@ float4 Resolve(PixelInput i) : SV_Target {
 	float3 hitViewPos;
 	float4 hitPacked, sampleColor, reflecttionColor;
 
+	UNITY_BRANCH
 	if(roughness > 0.1) {
 		ResolverCont = _ResolverNum;
 	} else {
@@ -163,8 +166,7 @@ float4 Resolve(PixelInput i) : SV_Target {
         hitZ = hitPacked.z;
 		hitViewPos = GetViewPos(GetSSRScreenPos(hitUv, hitZ), _InverseProjectionMatrix);
 
-		weight = BRDF_UE4(normalize(-viewPos), normalize(hitViewPos - viewPos), viewNormal, max(0.014, roughness)) / max(1e-5, hitPDF);
-		weight = weight;
+		weight = BRDF_Unity(normalize(-viewPos), normalize(hitViewPos - viewPos), viewNormal, max(0.014, roughness)) / max(1e-5, hitPDF);
 
 		intersectionCircleRadius = coneTangent * length(hitUv - uv);
 		mip = clamp(log2(intersectionCircleRadius * max(_ResolveSize.x, _ResolveSize.y)), 0, 4);
@@ -190,7 +192,8 @@ float4 Temporal (PixelInput i) : SV_Target {
 
 	float2 depthVelocity = tex2D(_CameraMotionVectorsTexture, uv);
 	float2 rayVelocity = GetRayMotionVector(1 - hitPacked.z, uv, _InverseViewProjectionMatrix, _LastFrameViewProjectionMatrix, _ViewProjectionMatrix);
-	float2 velocity = 0;
+	float2 velocityBase = lerp(depthVelocity, rayVelocity, 0.25);
+	float2 velocity = lerp(velocityBase, rayVelocity, Normal.y);
 
 	float2 du = float2(1 / _ScreenSize.x, 0);
 	float2 dv = float2(0, 1 / _ScreenSize.y);
@@ -212,19 +215,12 @@ float4 Temporal (PixelInput i) : SV_Target {
 	currentMin = (currentMin - center) * _TScale + center;
 	currentMax = (currentMax - center) * _TScale + center;
 
-	float TemporalScaler = 0;
-	if(roughness > 0.1) {
-		TemporalScaler = _TResponse;
-		velocity = lerp(depthVelocity, rayVelocity, 0.85);
-	} else {
-		TemporalScaler = 0.85;
-		velocity = lerp(depthVelocity, rayVelocity, Normal.y);
-	}
-
 	float4 afterColor = tex2D(_Resolve_RT, uv);
 	float4 beforeColor = tex2D(_TemporalBefore, uv - velocity);
 	beforeColor = clamp(beforeColor, currentMin, currentMax);
-    return lerp(afterColor, beforeColor, saturate(clamp(0, 0.97, TemporalScaler) *  (1 - length(velocity) * 16)));
+
+	float4 Temporalfiltter = lerp(afterColor, beforeColor, saturate(clamp(0, 0.99, _TResponse) *  (1 - length(velocity) * 8)));
+    return Temporalfiltter;
 }
 
 float4 Combien (PixelInput i) : SV_Target {	
@@ -245,13 +241,8 @@ float4 Combien (PixelInput i) : SV_Target {
 
 	float4 finalColor = 0;
 	float offsetU = uv.x / _ScreenSize.x;
-	float offsetY = uv.y / _ScreenSize.y;
-	float4 Sharpness0 = tex2D(_TemporalAfter, uv);
-	float4 Sharpness1 = tex2D(_TemporalAfter, uv + float2(offsetU, 0));
-	float4 Sharpness2 = tex2D(_TemporalAfter, uv + float2(-offsetU, 0));
-	float4 Sharpness3 = tex2D(_TemporalAfter, uv + float2(0, offsetY));
-	float4 Sharpness4 = tex2D(_TemporalAfter, uv + float2(0, -offsetY));
-	float4 ssrColor = (5 * Sharpness0 - Sharpness1 - Sharpness2 - Sharpness3 - Sharpness4) * AmbientOcclusion;
+	float offsetY = uv.y / _ScreenSize.y; 
+	float4 ssrColor = Sharpe(_TemporalAfter, _Sharpeness, _ScreenSize.xy, uv)  * AmbientOcclusion;
 	float ssrMask = sqr(ssrColor.a);
 	
 	float4 Cubemap =  tex2D(_CameraReflectionsTexture, uv);
@@ -260,6 +251,11 @@ float4 Combien (PixelInput i) : SV_Target {
 	sceneColor.rgb = max(1e-5, sceneColor.rgb - Cubemap.rgb);
 
 	finalColor = sceneColor + reflectionColor;
+
+	//float4 TemporalBefore = Luminance(tex2D(_TemporalBefore, uv));
+	//float4 TemporalAfter = Luminance(tex2D(_TemporalAfter, uv));
+	//float Variance = (TemporalAfter - pow(TemporalBefore, 2)) * ssrMask;
+
 	return finalColor;
 }
 

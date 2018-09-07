@@ -544,7 +544,7 @@ float4 HiZTrace_Unity(v2f i) : SV_Target {
 			CGPROGRAM
 			#pragma vertex vert
 			//#pragma fragment LinearTrace2D
-                        #pragma fragment HiZTrace3D
+            #pragma fragment HiZTrace3D
 		ENDCG
 		}
 	}

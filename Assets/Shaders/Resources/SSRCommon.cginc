@@ -106,6 +106,111 @@ half2 GetRayMotionVector(float rayDepth, float2 inUV, float4x4 _InverseViewProje
 	return vPosCur - vPosPrev;
 }
 
+float2 mipToSize(int mip, float2 _ReflectionBufferSize) {
+    return floor(_ReflectionBufferSize * exp2(-mip));
+}		
+
+float2 centerPixel(float2 inputP) {
+    return floor(inputP - float2(0.5,0.5)) + float2(0.5,0.5);
+}
+
+float2 snapToTexelCenter(float2 inputP, float2 texSize, float2 texSizeInv) {
+    return centerPixel(inputP * texSize) * texSizeInv;
+}		
+
+float normalWeight(float3 midpointNormal, float3 tapNormal) {
+    return clamp(dot(midpointNormal, tapNormal), 0, 1);
+}	
+
+float roughnessWeight(float midpointRoughness, float tapRoughness) {
+    return (1.0 - sqrt(sqrt(abs(midpointRoughness-tapRoughness))));
+}		
+
+float4 Sharpe(sampler2D sharpColor, float sharpness, float2 Resolution, float2 UV) {
+	float2 step = 1.0 / Resolution.xy;
+	
+	float3 texA = tex2D(sharpColor, UV + float2(-step.x, -step.y) * 1.5);
+	float3 texB = tex2D(sharpColor, UV + float2( step.x, -step.y) * 1.5);
+	float3 texC = tex2D(sharpColor, UV + float2(-step.x,  step.y) * 1.5);
+	float3 texD = tex2D(sharpColor, UV + float2( step.x,  step.y) * 1.5);
+   
+    float3 around = 0.25 * (texA + texB + texC + texD);
+	float4 center  = tex2D(sharpColor, UV);
+
+	float3 color = center.rgb + (center.rgb - around) * sharpness;
+    return float4(color, center.a);
+}
+				
+float4 BilateralUpsample(sampler2D _NormalTexture, sampler2D _RoughnessTexture, sampler2D _ReflectionTexture, float2 _ReflectionBufferSize, float2 tsP, int mip) {
+    float2 smallTexSize = mipToSize(mip, _ReflectionBufferSize);
+    float2 smallPixelPos = tsP * smallTexSize;
+    float2 smallPixelPosi = centerPixel(smallPixelPos);
+    float2 smallTexSizeInv = 1.0 / smallTexSize;
+
+
+    float2 p0 = smallPixelPosi * smallTexSizeInv;
+    float2 p3 = (smallPixelPosi + float2(1.0, 1.0)) * smallTexSizeInv;
+    float2 p1 = float2(p3.x, p0.y);
+    float2 p2 = float2(p0.x, p3.y);
+
+	float4 V0 = tex2Dlod(_ReflectionTexture, float4(p0.xy, 0, mip));
+	float4 V1 = tex2Dlod(_ReflectionTexture, float4(p1.xy, 0, mip));
+	float4 V2 = tex2Dlod(_ReflectionTexture, float4(p2.xy, 0, mip));
+	float4 V3 = tex2Dlod(_ReflectionTexture, float4(p3.xy, 0, mip));
+
+    float2  smallPixelPosf  = smallPixelPos - smallPixelPosi;
+    float a0 = (1.0 - smallPixelPosf.x) * (1.0 - smallPixelPosf.y);
+    float a1 = smallPixelPosf.x * (1.0 - smallPixelPosf.y);
+    float a2 = (1.0 - smallPixelPosf.x) * smallPixelPosf.y;
+    float a3 = smallPixelPosf.x * smallPixelPosf.y;
+
+    float2 fullTexSize = _ReflectionBufferSize;
+    float2 fullTexSizeInv = 1.0 / fullTexSize;
+
+    float4 hiP0 = float4(snapToTexelCenter(p0, fullTexSize, fullTexSizeInv), 0,0);
+    float4 hiP3 = float4(snapToTexelCenter(p3, fullTexSize, fullTexSizeInv), 0,0);
+    float4 hiP1 = float4(snapToTexelCenter(p1, fullTexSize, fullTexSizeInv), 0,0);
+    float4 hiP2 = float4(snapToTexelCenter(p2, fullTexSize, fullTexSizeInv), 0,0);
+
+    float4 tempCenter = tex2Dlod(_NormalTexture, float4(tsP, 0, 0));
+    float3 n  = tempCenter.xyz * 2 - 1;
+
+    float4 temp0 = tex2Dlod(_NormalTexture, hiP0);
+    float4 temp1 = tex2Dlod(_NormalTexture, hiP1);
+    float4 temp2 = tex2Dlod(_NormalTexture, hiP2);
+    float4 temp3 = tex2Dlod(_NormalTexture, hiP3);
+
+    float3 n0 = temp0.xyz * 2 - 1;
+    float3 n1 = temp1.xyz * 2 - 1;
+    float3 n2 = temp2.xyz * 2 - 1;
+    float3 n3 = temp3.xyz * 2 - 1;
+
+    a0 *= normalWeight(n, n0);
+    a1 *= normalWeight(n, n1);
+    a2 *= normalWeight(n, n2);
+    a3 *= normalWeight(n, n3);
+
+    float r = tex2Dlod(_RoughnessTexture, float4(tsP, 0, 0)).r;
+    float r0 = tex2Dlod(_RoughnessTexture, hiP0);
+    float r1 = tex2Dlod(_RoughnessTexture, hiP1);
+    float r2 = tex2Dlod(_RoughnessTexture, hiP2);
+    float r3 = tex2Dlod(_RoughnessTexture, hiP3);
+
+    a0 *= roughnessWeight(r, r0);
+    a1 *= roughnessWeight(r, r1);
+    a2 *= roughnessWeight(r, r2);
+    a3 *= roughnessWeight(r, r3);
+
+    a0 = max(a0, 0.001);
+    a1 = max(a1, 0.001);
+    a2 = max(a2, 0.001);
+    a3 = max(a3, 0.001);
+
+    float norm = 1.0 / (a0 + a1 + a2 + a3);
+    float4 value = (V0 * a0 + V1 * a1 + V2 * a2 + V3 * a3) * norm;
+    return value;
+}
+
 #define DOWNSAMPLE_DEPTH_MODE 2
 #define UPSAMPLE_DEPTH_THRESHOLD 1.5f
 #define BLUR_DEPTH_FACTOR 0.5
